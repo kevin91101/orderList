@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>電商訂單整理工具</title>
+    <style>
+        :root {
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+            color: #172033;
+            background: #f3f6fb
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            padding: 24px
+        }
+
+        main {
+            max-width: 1500px;
+            margin: auto
+        }
+
+        h1 {
+            margin: 0 0 6px;
+            font-size: 26px
+        }
+
+        .lead {
+            color: #64748b;
+            margin: 0 0 20px
+        }
+
+        .panel {
+            background: #fff;
+            border: 1px solid #dfe6ef;
+            border-radius: 14px;
+            padding: 18px;
+            margin-bottom: 16px
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap
+        }
+
+        select,
+        input[type=file] {
+            padding: 9px;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            background: #fff
+        }
+
+        button {
+            border: 0;
+            border-radius: 9px;
+            padding: 10px 15px;
+            background: #2563eb;
+            color: #fff;
+            cursor: pointer
+        }
+
+        button.secondary {
+            background: #475569
+        }
+
+        button:disabled {
+            opacity: .4;
+            cursor: not-allowed
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 150px;
+            margin-top: 12px;
+            padding: 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 9px;
+            font: 13px monospace
+        }
+
+        .status {
+            margin-top: 10px;
+            color: #475569
+        }
+
+        .error {
+            color: #b91c1c
+        }
+
+        .summary {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin: 0 0 12px;
+            color: #475569
+        }
+
+        .summary strong {
+            color: #111827
+        }
+
+        .wrap {
+            overflow: auto;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px
+        }
+
+        table {
+            width: 100%;
+            min-width: 1250px;
+            border-collapse: collapse;
+            background: #fff;
+            font-size: 13px
+        }
+
+        th,
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #e5eaf1;
+            text-align: left;
+            white-space: nowrap
+        }
+
+        th {
+            position: sticky;
+            top: 0;
+            background: #eaf2ff;
+            z-index: 1
+        }
+
+        tbody tr:hover {
+            background: #f8fafc
+        }
+
+        .empty {
+            text-align: center;
+            color: #64748b;
+            padding: 30px
+        }
+
+        .note {
+            font-size: 12px;
+            color: #64748b;
+            margin-top: 10px
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <h1>電商訂單整理工具</h1>
+        <p class="lead">依照 parse_total_clean.py 的 momo、Coupang、蝦皮欄位整理訂單，並以商品一列的方式顯示表格；相同訂單編號的重複欄位會自動合併。</p>
+
+        <section class="panel">
+            <div class="controls">
+                <label for="platform">平台：</label>
+                <select id="platform">
+                    <option value="momo">momo</option>
+                    <option value="coupang">Coupang</option>
+                    <option value="shopee">蝦皮</option>
+                </select>
+                <input id="file" type="file" accept=".json,application/json">
+                <button id="parse">解析並顯示</button><button id="csv" class="secondary" disabled>下載 CSV</button><button id="xlsx" class="secondary" disabled>下載 Excel（合併儲存格）</button><button
+                    id="clear" class="secondary">清除</button>
+            </div>
+            <textarea id="json" placeholder="上傳 JSON，或將平台 Network Response 貼在這裡"></textarea>
+            <div id="status" class="status">尚未載入資料</div>
+            <div class="note">CSV 以空白重複欄位模擬合併；Excel (.xlsx) 可真正合併儲存格（需網路載入匯出元件）。</div>
+            <div class="note">momo 支援 { data: [...] }；Coupang 支援訂單陣列；蝦皮支援 { data: { card_list: [...] } }。</div>
+        </section>
+
+        <section class="panel">
+            <div id="summary" class="summary"></div>
+            <div class="wrap">
+                <table>
+                    <thead id="thead"></thead>
+                    <tbody id="tbody">
+                        <tr>
+                            <td class="empty">請先載入 JSON</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script>
+        const $ = id => document.getElementById(id);
+        let rows = [], headers = [];
+        const config = {
+            momo: [
+                ["訂單編號", "orderId"], ["訂單日期", "orderDate"], ["客戶名稱", "customer"], ["收件人", "receiver"], ["收件地址", "address"], ["配送方式", "delivery"], ["商品編號", "sku"], ["商品名稱", "name"], ["數量", "qty"], ["單價", "price"], ["商品總額", "itemTotal"], ["訂單金額", "orderTotal"]
+            ],
+            coupang: [
+                ["訂單編號", "orderId"], ["訂單時間", "orderDate"], ["會員", "customer"], ["收件人", "receiver"], ["收件地址", "address"], ["取貨門市", "pickup"], ["物流", "delivery"], ["物流狀態", "status"], ["商品 ID", "sku"], ["商品名稱", "name"], ["數量", "qty"], ["商品金額", "itemAmount"]
+            ],
+            shopee: [
+                ["訂單編號", "orderId"], ["客戶 ID", "customer"], ["訂單總額", "orderTotal"], ["配送方式", "delivery"], ["商品名稱", "name"], ["商品數量", "qty"]
+            ]
+        };
+        function text(v) { return v === null || v === undefined ? "" : String(v) }
+        function parseMomo(json) {
+            const orders = Array.isArray(json) ? json : (json?.data || []);
+            if (!Array.isArray(orders)) throw Error("momo JSON 找不到 data 訂單陣列");
+            let out = [];
+            orders.forEach(o => {
+                const ds = o.delyGbResultList || [], delivery = ds[0]?.delyGbText || "", items = o.orderDtMergeResultList || [];
+                const base = { orderId: o.orderNo, orderDate: o.orderDate, customer: o.custName, receiver: o.receiverName, address: o.desensitizeReceiverAddrOut || o.receiverAddrOut, delivery, orderTotal: o.orderAmt };
+                if (!items.length) out.push({ ...base });
+                items.forEach(i => out.push({ ...base, sku: i.goodsCode, name: i.goodsName, qty: i.num, price: i.salePrice, itemTotal: i.totalAmt }));
+            });
+            return { count: orders.length, rows: out };
+        }
+        function parseCoupang(json) {
+            const orders = Array.isArray(json) ? json : (json?.data || []);
+            if (!Array.isArray(orders)) throw Error("Coupang JSON 必須是訂單陣列");
+            let out = [];
+            orders.forEach(o => {
+                const p = o.pickupAddress || {}, items = o.items || [];
+                const base = { orderId: o.orderId, orderDate: o.paidAt, customer: o.memberName, receiver: o.receiverName, address: o.addr1, pickup: p.pickUpBranchName, delivery: o.deliverName, status: o.deliveryStatusCode };
+                if (!items.length) out.push({ ...base });
+                items.forEach(i => out.push({ ...base, sku: i.vendorItemId, name: i.vendorItemName, qty: i.count, itemAmount: i.codPrice }));
+            });
+            return { count: orders.length, rows: out };
+        }
+        function parseShopee(json) {
+            const orders = json?.data?.card_list;
+            if (!Array.isArray(orders)) throw Error("蝦皮 JSON 找不到 data.card_list");
+            let out = [];
+            orders.forEach(o => {
+                const c = o.package_card || {}, h = c.card_header || {}, buyer = h.buyer_info || {}, pay = c.payment_info || {}, ful = c.fulfilment_info || {}, groups = c.item_info_group || {};
+                const raw = pay.total_price, total = typeof raw === "number" ? Math.floor(raw / 100000) : "";
+                const base = { orderId: h.order_sn, customer: buyer.username, orderTotal: total, delivery: ful.fulfilment_channel_name };
+                const items = (groups.item_info_list || []).flatMap(g => g.item_list || []);
+                if (!items.length) out.push({ ...base });
+                items.forEach(i => out.push({ ...base, name: i.name, qty: i.amount }));
+            });
+            return { count: orders.length, rows: out };
+        }
+        const detailKeys = new Set(["sku", "name", "qty", "price", "itemTotal", "itemAmount"]);
+        function groupedRows() {
+            const groups = new Map();
+            rows.forEach((row, index) => {
+                const id = text(row.orderId).trim();
+                const groupKey = id ? `order:${id}` : `missing:${index}`;
+                if (!groups.has(groupKey)) groups.set(groupKey, []);
+                groups.get(groupKey).push(row);
+            });
+            return [...groups.values()];
+        }
+        // 同網頁表格的合併規則，輸出 CSV 空白欄位與 Excel 合併範圍。
+        function exportLayout() {
+            const output = [];
+            const merges = [];
+            for (const group of groupedRows()) {
+                const offset = output.length;
+                group.forEach(row => output.push(headers.map(([, key]) => text(row[key]))));
+                headers.forEach(([, key], col) => {
+                    if (detailKeys.has(key)) return;
+                    let start = 0;
+                    while (start < group.length) {
+                        let end = start + 1;
+                        const value = text(group[start][key]);
+                        while (end < group.length && text(group[end][key]) === value) end++;
+                        if (end - start > 1) {
+                            merges.push({s:{r:offset + start + 1,c:col},e:{r:offset + end,c:col}});
+                            for (let i = start + 1; i < end; i++) output[offset + i][col] = "";
+                        }
+                        start = end;
+                    }
+                });
+            }
+            return {output, merges};
+        }
+        function downloadBlob(blob, filename) {
+            const url = URL.createObjectURL(blob), a = document.createElement("a");
+            a.href = url; a.download = filename; a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+        function render() {
+            headers = config[$("platform").value];
+            $("thead").innerHTML = "";
+            const heading = document.createElement("tr");
+            headers.forEach(([label]) => {
+                const th = document.createElement("th");
+                th.textContent = label;
+                heading.append(th);
+            });
+            $("thead").append(heading);
+            $("tbody").innerHTML = "";
+            if (!rows.length) {
+                $("tbody").innerHTML = `<tr><td colspan="${headers.length}" class="empty">沒有資料</td></tr>`;
+                return;
+            }
+
+            const frag = document.createDocumentFragment();
+            for (const group of groupedRows()) {
+                const trs = group.map(() => document.createElement("tr"));
+                headers.forEach(([, key]) => {
+                    if (detailKeys.has(key)) {
+                        group.forEach((row, index) => {
+                            const td = document.createElement("td");
+                            td.textContent = text(row[key]);
+                            trs[index].append(td);
+                        });
+                        return;
+                    }
+                    // 僅合併同訂單內、相鄰且值完全相同的欄位。
+                    let start = 0;
+                    while (start < group.length) {
+                        const value = text(group[start][key]);
+                        let end = start + 1;
+                        while (end < group.length && text(group[end][key]) === value) end++;
+                        const td = document.createElement("td");
+                        td.textContent = value;
+                        if (end - start > 1) td.rowSpan = end - start;
+                        trs[start].append(td);
+                        start = end;
+                    }
+                });
+                trs.forEach(tr => frag.append(tr));
+            }
+            $("tbody").append(frag);
+        }
+        $("file").addEventListener("change", async () => { const f = $("file").files[0]; if (f) { $("json").value = await f.text(); $("status").textContent = `已載入 ${f.name}，請按解析` } });
+        $("parse").addEventListener("click", () => {
+            try {
+                const j = JSON.parse($("json").value), p = $("platform").value;
+                const result = p === "momo" ? parseMomo(j) : p === "coupang" ? parseCoupang(j) : parseShopee(j);
+                rows = result.rows; render();
+                $("summary").innerHTML = `<span>訂單數：<strong>${result.count}</strong></span><span>表格列數：<strong>${rows.length}</strong></span>`;
+                $("status").textContent = "解析成功"; $("status").className = "status"; $("csv").disabled = !rows.length; $("xlsx").disabled = !rows.length;
+            } catch (e) { rows = []; $("csv").disabled = true; $("xlsx").disabled = true; $("summary").textContent = ""; $("status").textContent = "解析失敗：" + e.message; $("status").className = "status error"; render() }
+        });
+        $("platform").addEventListener("change", () => { rows = []; $("summary").textContent = ""; $("csv").disabled = true; $("xlsx").disabled = true; render(); $("status").textContent = "已切換平台，請載入該平台 JSON" });
+        $("clear").addEventListener("click", () => { $("file").value = ""; $("json").value = ""; rows = []; $("summary").textContent = ""; $("status").textContent = "尚未載入資料"; $("status").className = "status"; $("csv").disabled = true; $("xlsx").disabled = true; render() });
+        $("csv").addEventListener("click", () => {
+            const esc = v => '"' + text(v).replaceAll('"', '""') + '"';
+            const {output} = exportLayout();
+            const lines = [headers.map(([label]) => esc(label)).join(","), ...output.map(r => r.map(esc).join(","))];
+            downloadBlob(new Blob(["\uFEFF" + lines.join("\r\n")], {type:"text/csv;charset=utf-8"}), $("platform").value + "_orders_合併顯示.csv");
+        });
+        $("xlsx").addEventListener("click", () => {
+            if (typeof XLSX === "undefined") {
+                $("status").textContent = "無法載入 Excel 匯出元件，請確認網路連線後重新整理頁面";
+                $("status").className = "status error";
+                return;
+            }
+            const {output, merges} = exportLayout();
+            const sheet = XLSX.utils.aoa_to_sheet([headers.map(([label]) => label), ...output]);
+            sheet["!merges"] = merges;
+            sheet["!cols"] = headers.map(([label, key]) => ({wch: key === "name" ? 45 : key === "address" ? 38 : Math.max(16, label.length * 2 + 4)}));
+            const book = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(book, sheet, "訂單明細");
+            XLSX.writeFile(book, $("platform").value + "_orders_合併儲存格.xlsx");
+        });
+        render();
+    </script>
+</body>
+
+</html>
