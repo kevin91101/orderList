@@ -175,7 +175,7 @@
             <textarea id="json" placeholder="上傳 JSON，或將平台 Network Response 貼在這裡"></textarea>
             <div id="status" class="status">尚未載入資料</div>
             <div class="note">CSV 以空白重複欄位模擬合併；Excel (.xlsx) 可真正合併儲存格（需網路載入匯出元件）。</div>
-            <div class="note">momo 支援 { data: [...] }；Coupang 支援訂單陣列；蝦皮支援 { data: { card_list: [...] } }。</div>
+            <div class="note">momo 支援 { data: [...] }；Coupang 支援訂單陣列；蝦皮支援多份 { data: { card_list: [...] } } 連續貼上（可換行），或 JSON 陣列；相同訂單編號會自動去重。</div>
         </section>
 
         <section class="panel">
@@ -231,6 +231,62 @@
                 items.forEach(i => out.push({ ...base, sku: i.vendorItemId, name: i.vendorItemName, qty: i.count, itemAmount: i.codPrice }));
             });
             return { count: orders.length, rows: out };
+        }
+        // 可讀取多份連續貼上的完整 JSON（不要求在物件之間加逗號），
+        // 也支援以逗號分隔及外層陣列包裝的格式。
+        function parseJsonDocuments(input) {
+            const source = input.trim();
+            if (!source) throw Error("請先貼上 JSON 資料");
+            try {
+                const parsed = JSON.parse(source);
+                return Array.isArray(parsed) ? parsed : [parsed];
+            } catch (_) { /* 可能是多份相鄰的 JSON */ }
+            const docs = [];
+            let start = -1, depth = 0, inString = false, escaped = false;
+            for (let i = 0; i < source.length; i++) {
+                const c = source[i];
+                if (start < 0) {
+                    if (/\s|,/.test(c)) continue;
+                    if (c !== '{' && c !== '[') throw Error(`第 ${i + 1} 個字元附近不是有效的 JSON 開頭`);
+                    start = i;
+                }
+                if (inString) {
+                    if (escaped) escaped = false;
+                    else if (c === '\\') escaped = true;
+                    else if (c === '"') inString = false;
+                } else if (c === '"') inString = true;
+                else if (c === '{' || c === '[') depth++;
+                else if (c === '}' || c === ']') {
+                    depth--;
+                    if (depth < 0) throw Error("JSON 括號不成對");
+                    if (depth === 0) {
+                        const doc = JSON.parse(source.slice(start, i + 1));
+                        if (Array.isArray(doc)) docs.push(...doc);
+                        else docs.push(doc);
+                        start = -1;
+                    }
+                }
+            }
+            if (start >= 0 || inString || depth !== 0) throw Error("最後一份 JSON 不完整，請確認是否複製完整");
+            if (!docs.length) throw Error("找不到有效的 JSON 資料");
+            return docs;
+        }
+        function parseShopeeDocuments(documents) {
+            const all = [];
+            documents.forEach((doc, index) => {
+                const list = doc?.data?.card_list;
+                if (!Array.isArray(list)) throw Error(`第 ${index + 1} 份蝦皮 JSON 找不到 data.card_list`);
+                all.push(...list);
+            });
+            const seen = new Set();
+            const unique = all.filter(order => {
+                const id = text(order?.package_card?.card_header?.order_sn).trim();
+                if (!id) return true;
+                if (seen.has(id)) return false;
+                seen.add(id);
+                return true;
+            });
+            return {...parseShopee({data:{card_list:unique}}), sourceCount: documents.length, duplicates: all.length - unique.length};
         }
         function parseShopee(json) {
             const orders = json?.data?.card_list;
@@ -334,10 +390,11 @@
         $("file").addEventListener("change", async () => { const f = $("file").files[0]; if (f) { $("json").value = await f.text(); $("status").textContent = `已載入 ${f.name}，請按解析` } });
         $("parse").addEventListener("click", () => {
             try {
-                const j = JSON.parse($("json").value), p = $("platform").value;
-                const result = p === "momo" ? parseMomo(j) : p === "coupang" ? parseCoupang(j) : parseShopee(j);
+                const p = $("platform").value;
+                const j = p === "shopee" ? parseJsonDocuments($("json").value) : JSON.parse($("json").value);
+                const result = p === "momo" ? parseMomo(j) : p === "coupang" ? parseCoupang(j) : parseShopeeDocuments(j);
                 rows = result.rows; render();
-                $("summary").innerHTML = `<span>訂單數：<strong>${result.count}</strong></span><span>表格列數：<strong>${rows.length}</strong></span>`;
+                $("summary").innerHTML = `<span>訂單數：<strong>${result.count}</strong></span><span>表格列數：<strong>${rows.length}</strong></span>${p === "shopee" ? `<span>JSON 份數：<strong>${result.sourceCount}</strong></span><span>重複訂單已排除：<strong>${result.duplicates}</strong></span>` : ""}`;
                 $("status").textContent = "解析成功"; $("status").className = "status"; $("csv").disabled = !rows.length; $("xlsx").disabled = !rows.length;
             } catch (e) { rows = []; $("csv").disabled = true; $("xlsx").disabled = true; $("summary").textContent = ""; $("status").textContent = "解析失敗：" + e.message; $("status").className = "status error"; render() }
         });
