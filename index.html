@@ -174,7 +174,7 @@
             </div>
             <textarea id="json" placeholder="上傳 JSON，或將平台 Network Response 貼在這裡"></textarea>
             <div id="status" class="status">尚未載入資料</div>
-            <div class="note">CSV 以空白重複欄位模擬合併；Excel (.xlsx) 可真正合併儲存格（需網路載入匯出元件）。</div>
+            <div class="note">CSV 以空白重複欄位模擬合併；Excel (.xlsx) 可真正合併儲存格，並新增出貨日期、備註兩欄，字體預設 18pt（約 24px）；優先依物流／配送方式，再依訂單時間排序（需網路載入匯出元件）。</div>
             <div class="note">momo 支援 { data: [...] }；Coupang 支援訂單陣列；蝦皮支援多份 { data: { card_list: [...] } } 連續貼上（可換行），或 JSON 陣列；相同訂單編號會自動去重。</div>
         </section>
 
@@ -192,7 +192,7 @@
             </div>
         </section>
     </main>
-    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
     <script>
         const $ = id => document.getElementById(id);
         let rows = [], headers = [];
@@ -311,7 +311,27 @@
                 if (!groups.has(groupKey)) groups.set(groupKey, []);
                 groups.get(groupKey).push(row);
             });
-            return [...groups.values()];
+            const ordered = [...groups.values()];
+            // 物流／配送方式優先；同一配送方式內按訂單時間由舊到新排序。
+            // 蝦皮原始解析未提供訂單時間，無時間時維持原始順序。
+            const timeValue = group => {
+                const raw = group[0].orderDate;
+                if (raw === undefined || raw === null || raw === "") return null;
+                if (typeof raw === "number") return raw < 1e11 ? raw * 1000 : raw;
+                const parsed = Date.parse(String(raw).replace(" ", "T"));
+                return Number.isFinite(parsed) ? parsed : null;
+            };
+            return ordered.map((group, index) => ({group, index})).sort((a,b) => {
+                const deliveryA = text(a.group[0].delivery).trim();
+                const deliveryB = text(b.group[0].delivery).trim();
+                const byDelivery = deliveryA.localeCompare(deliveryB, "zh-Hant", {numeric:true});
+                if (byDelivery) return byDelivery;
+                const ta = timeValue(a.group), tb = timeValue(b.group);
+                if (ta !== null && tb !== null && ta !== tb) return ta - tb;
+                if (ta === null && tb !== null) return 1;
+                if (tb === null && ta !== null) return -1;
+                return a.index - b.index;
+            }).map(item => item.group);
         }
         // 同網頁表格的合併規則，輸出 CSV 空白欄位與 Excel 合併範圍。
         function exportLayout() {
@@ -406,19 +426,41 @@
             const lines = [headers.map(([label]) => esc(label)).join(","), ...output.map(r => r.map(esc).join(","))];
             downloadBlob(new Blob(["\uFEFF" + lines.join("\r\n")], {type:"text/csv;charset=utf-8"}), $("platform").value + "_orders_合併顯示.csv");
         });
-        $("xlsx").addEventListener("click", () => {
-            if (typeof XLSX === "undefined") {
+        $("xlsx").addEventListener("click", async () => {
+            if (typeof ExcelJS === "undefined") {
                 $("status").textContent = "無法載入 Excel 匯出元件，請確認網路連線後重新整理頁面";
                 $("status").className = "status error";
                 return;
             }
-            const {output, merges} = exportLayout();
-            const sheet = XLSX.utils.aoa_to_sheet([headers.map(([label]) => label), ...output]);
-            sheet["!merges"] = merges;
-            sheet["!cols"] = headers.map(([label, key]) => ({wch: key === "name" ? 45 : key === "address" ? 38 : Math.max(16, label.length * 2 + 4)}));
-            const book = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(book, sheet, "訂單明細");
-            XLSX.writeFile(book, $("platform").value + "_orders_合併儲存格.xlsx");
+            try {
+                const {output, merges} = exportLayout();
+                const labels = [...headers.map(([label]) => label), "出貨日期", "備註"];
+                const book = new ExcelJS.Workbook();
+                const sheet = book.addWorksheet("訂單明細");
+                sheet.addRow(labels);
+                output.forEach(r => sheet.addRow([...r, "", ""]));
+                merges.forEach(({s,e}) => sheet.mergeCells(s.r + 1, s.c + 1, e.r + 1, e.c + 1));
+                sheet.columns = [...headers.map(([label,key]) => ({width: key === "name" ? 48 : key === "address" ? 42 : Math.max(20, label.length * 2 + 8)})), {width: 22}, {width: 36}];
+                sheet.eachRow((row, rowNumber) => {
+                    row.height = rowNumber === 1 ? 38 : 36;
+                    row.eachCell({includeEmpty:true}, cell => {
+                        cell.font = {name:"Microsoft JhengHei", size:18, bold:rowNumber === 1};
+                        cell.alignment = {vertical:"middle", horizontal:"left", wrapText:true};
+                        cell.border = {bottom:{style:"thin",color:{argb:"FFE2E8F0"}}};
+                        if (rowNumber === 1) cell.fill = {type:"pattern",pattern:"solid",fgColor:{argb:"FFEAF2FF"}};
+                    });
+                });
+                sheet.views = [{state:"frozen",ySplit:1}];
+                const bytes = await book.xlsx.writeBuffer();
+                const today = new Date();
+                const dateStr = today.getFullYear().toString() +
+                    String(today.getMonth() + 1).padStart(2, "0") +
+                    String(today.getDate()).padStart(2, "0");
+                downloadBlob(new Blob([bytes], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}), $("platform").value + "_orders_" + dateStr + ".xlsx");
+            } catch (e) {
+                $("status").textContent = "Excel 匯出失敗：" + e.message;
+                $("status").className = "status error";
+            }
         });
         render();
     </script>
