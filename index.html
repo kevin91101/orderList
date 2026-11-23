@@ -201,8 +201,9 @@
                 ["訂單編號", "orderId"], ["訂單日期", "orderDate"], ["客戶名稱", "customer"], ["收件人", "receiver"], ["收件地址", "address"], ["配送方式", "delivery"], ["商品編號", "sku"], ["商品名稱", "name"], ["數量", "qty"], ["單價", "price"], ["商品總額", "itemTotal"], ["訂單金額", "orderTotal"]
             ],
             coupang: [
-                ["訂單編號", "orderId"], ["訂單時間", "orderDate"], ["會員", "customer"], ["收件人", "receiver"], ["收件地址", "address"], ["取貨門市", "pickup"], ["物流", "delivery"], ["物流狀態", "status"], ["商品 ID", "sku"], ["商品名稱", "name"], ["數量", "qty"], ["商品金額", "itemAmount"]
+                ["訂單編號", "orderId"], ["訂單時間", "orderDate"], ["會員", "customer"], ["收件人", "receiver"], ["收件地址", "address"], ["取貨門市", "pickup"], ["物流", "delivery"], ["物流狀態", "status"], ["商品名稱", "name"], ["數量", "qty"], ["商品金額", "itemAmount"]
             ],
+          // coupang的["商品 ID", "sku"]被我刪掉先不顯示
             shopee: [
                 ["訂單編號", "orderId"], ["客戶 ID", "customer"], ["訂單總額", "orderTotal"], ["配送方式", "delivery"], ["商品名稱", "name"], ["商品數量", "qty"]
             ]
@@ -434,17 +435,58 @@
             }
             try {
                 const {output, merges} = exportLayout();
-                const labels = [...headers.map(([label]) => label), "出貨日期", "備註"];
+                const labels = ["序號", ...headers.map(([label]) => label), "備註"];
                 const book = new ExcelJS.Workbook();
                 const sheet = book.addWorksheet("訂單明細");
                 sheet.addRow(labels);
-                output.forEach(r => sheet.addRow([...r, "", ""]));
-                merges.forEach(({s,e}) => sheet.mergeCells(s.r + 1, s.c + 1, e.r + 1, e.c + 1));
-                sheet.columns = [...headers.map(([label,key]) => ({width: key === "name" ? 48 : key === "address" ? 42 : Math.max(20, label.length * 2 + 8)})), {width: 22}, {width: 36}];
+                const orderIdIndex = headers.findIndex(([, key]) => key === "orderId");
+
+                const orderNumbers = new Map();
+                let serial = 0;
+                
+                output.forEach(r => {
+                    const orderId = r[orderIdIndex];
+                
+                    if (!orderNumbers.has(orderId)) {
+                        orderNumbers.set(orderId, ++serial);
+                    }
+                
+                    sheet.addRow([
+                        orderNumbers.get(orderId),
+                        ...r,
+                        ""
+                    ]);
+                });
+                // output.forEach((r, index) => {
+                //   sheet.addRow([index + 1, ...r, ""]);
+                // });
+                // 原本欄位的合併範圍向右移一欄
+                merges.forEach(({s,e}) => sheet.mergeCells(s.r + 1, s.c + 2, e.r + 1, e.c + 2));
+                // 合併同一訂單的序號欄
+                let startRow = 2;
+                
+                while (startRow <= output.length + 1) {
+                    const orderId = output[startRow - 2][orderIdIndex];
+                    let endRow = startRow;
+                
+                    while (
+                        endRow < output.length + 1 &&
+                        output[endRow - 1][orderIdIndex] === orderId
+                    ) {
+                        endRow++;
+                    }
+                
+                    if (endRow > startRow) {
+                        sheet.mergeCells(startRow, 1, endRow, 1);
+                    }
+                
+                    startRow = endRow + 1;
+                }
+                sheet.columns = [{width: 10}, ...headers.map(([label,key]) => ({width: key === "name" ? 48 : key === "address" ? 42 : Math.max(20, label.length * 2 + 8)})), {width: 22}, {width: 36}];
                 sheet.eachRow((row, rowNumber) => {
                     row.height = rowNumber === 1 ? 38 : 36;
                     row.eachCell({includeEmpty:true}, cell => {
-                        cell.font = {name:"Microsoft JhengHei", size:18, bold:rowNumber === 1};
+                        cell.font = {name:"Microsoft JhengHei", size:24, bold:rowNumber === 1};
                         cell.alignment = {vertical:"middle", horizontal:"left", wrapText:true};
                         cell.border = {bottom:{style:"thin",color:{argb:"FFE2E8F0"}}};
                         if (rowNumber === 1) cell.fill = {type:"pattern",pattern:"solid",fgColor:{argb:"FFEAF2FF"}};
