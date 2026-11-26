@@ -174,7 +174,7 @@
             </div>
             <textarea id="json" placeholder="上傳 JSON，或將平台 Network Response 貼在這裡"></textarea>
             <div id="status" class="status">尚未載入資料</div>
-            <div class="note">CSV 以空白重複欄位模擬合併；Excel (.xlsx) 可真正合併儲存格，序號與備註依訂單合併，並加上訂單外框，字體預設 24pt；優先依物流／配送方式，再依訂單時間排序（需網路載入匯出元件）。</div>
+            <div class="note">CSV 以空白重複欄位模擬合併；Excel (.xlsx) 可真正合併儲存格，序號與備註依訂單合併，並加上訂單外框及交錯底色，字體預設 24pt；優先依物流／配送方式，再依訂單時間排序（需網路載入匯出元件）。</div>
             <div class="note">momo 支援 { data: [...] }；Coupang 支援訂單陣列；蝦皮支援多份 { data: { card_list: [...] } } 連續貼上（可換行），或 JSON 陣列；相同訂單編號會自動去重。</div>
         </section>
 
@@ -201,11 +201,11 @@
                 ["訂單編號", "orderId"], ["訂單日期", "orderDate"], ["客戶名稱", "customer"], ["收件人", "receiver"], ["收件地址", "address"], ["配送方式", "delivery"], ["商品編號", "sku"], ["商品名稱", "name"], ["數量", "qty"], ["單價", "price"], ["商品總額", "itemTotal"], ["訂單金額", "orderTotal"]
             ],
             coupang: [
-                ["訂單編號", "orderId"], ["訂單時間", "orderDate"], ["會員", "customer"], ["收件人", "receiver"], ["收件地址", "address"], ["取貨門市", "pickup"], ["物流", "delivery"], ["物流狀態", "status"], ["商品名稱", "name"], ["數量", "qty"], ["商品金額", "itemAmount"]
+                ["訂單編號", "orderId"], ["訂單時間", "orderDate"], ["會員", "customer"], ["收件人", "receiver"], ["收件地址", "address"], ["取貨門市", "pickup"], ["物流", "delivery"], ["商品名稱", "name"], ["數量", "qty"]
             ],
-          // coupang的["商品 ID", "sku"]被我刪掉先不顯示
+          // coupang的["商品 ID", "sku"], ["商品金額", "itemAmount"], ["物流狀態", "status"]被我刪掉先不顯示
             shopee: [
-                ["訂單編號", "orderId"], ["客戶 ID", "customer"], ["訂單總額", "orderTotal"], ["配送方式", "delivery"], ["商品名稱", "name"], ["商品數量", "qty"]
+                ["訂單編號", "orderId"], ["客戶 ID", "customer"], ["配送方式", "delivery"], ["商品名稱", "name"], ["商品數量", "qty"], ["訂單總額", "orderTotal"]
             ]
         };
         function text(v) { return v === null || v === undefined ? "" : String(v) }
@@ -462,7 +462,7 @@
                 ranges.forEach(range => {
                     for (let r = range.top; r <= range.bottom; r++) mergedAt.set(`${r}:${range.col}`, range);
                 });
-                function styleRow(r, start, end) {
+                function styleRow(r, start, end, shaded = false) {
                     const row = sheet.getRow(r);
                     row.height = r === 1 ? 38 : 36;
                     for (let c = 1; c <= lastCol; c++) {
@@ -477,11 +477,12 @@
                             ...(r === end ? {bottom:outer} : !merge || r === merge.bottom ? {bottom:thin} : {})
                         };
                         if (r === 1) cell.fill = {type:"pattern",pattern:"solid",fgColor:{argb:"FFEAF2FF"}};
+                        else if (shaded) cell.fill = {type:"pattern",pattern:"solid",fgColor:{argb:"FFA7A7A7"}};
                     }
                 }
                 styleRow(1,1,1);
-                orderRanges.forEach(({start,end}) => {
-                    for (let r = start; r <= end; r++) styleRow(r,start,end);
+                orderRanges.forEach(({start,end}, index) => {
+                    for (let r = start; r <= end; r++) styleRow(r,start,end,index % 2 === 0);
                 });
                 sheet.views = [{state:"frozen",ySplit:1}];
                 const bytes = await book.xlsx.writeBuffer();
